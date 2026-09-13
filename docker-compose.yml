@@ -1,0 +1,213 @@
+name: devopsshack-polyglot
+
+# -----------------------------------------------------------------------------
+# One-file deployment for the whole polyglot lab: Postgres, all 7 backend
+# services (Java, Go, Node.js, Python, C#, Ruby, PHP), and the React frontend.
+#
+# Usage:
+#   docker compose up -d --build
+#
+# See README.docker.md for the full walkthrough.
+#
+# DB credentials (microapp / microapp123) are intentionally fixed rather
+# than pulled from .env: they're baked into docker/postgres/init/*.sql too,
+# so changing one without the others breaks the stack. See README.docker.md
+# if you need to change them for a non-local deployment.
+# -----------------------------------------------------------------------------
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Executed once, in filename order, only when the data volume is empty.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - polyglot-network
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    container_name: auth-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AUTH_DB_URL: jdbc:postgresql://postgres:5432/auth_db
+      DB_USER: microapp
+      DB_PASSWORD: microapp123
+    ports:
+      - "${AUTH_SERVICE_PORT:-8081}:8081"
+    networks:
+      - polyglot-network
+
+  catalog-service:
+    build:
+      context: ./services/catalog-service
+      dockerfile: Dockerfile
+    container_name: catalog-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CATALOG_DB_DSN: postgres://microapp:microapp123@postgres:5432/catalog_db?sslmode=disable
+    ports:
+      - "${CATALOG_SERVICE_PORT:-8082}:8082"
+    networks:
+      - polyglot-network
+
+  inventory-service:
+    build:
+      context: ./services/inventory-service
+      dockerfile: Dockerfile
+    container_name: inventory-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      INVENTORY_DB_URL: postgres://microapp:microapp123@postgres:5432/inventory_db
+    ports:
+      - "${INVENTORY_SERVICE_PORT:-8083}:8083"
+    networks:
+      - polyglot-network
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: notification-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NOTIFICATION_DB_URL: postgres://microapp:microapp123@postgres:5432/notification_db
+    ports:
+      - "${NOTIFICATION_SERVICE_PORT:-8086}:8086"
+    networks:
+      - polyglot-network
+
+  order-service:
+    build:
+      context: ./services/order-service
+      dockerfile: Dockerfile
+    container_name: order-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      catalog-service:
+        condition: service_started
+      inventory-service:
+        condition: service_started
+      notification-service:
+        condition: service_started
+    environment:
+      ORDER_DB_DSN: "dbname=order_db user=microapp password=microapp123 host=postgres port=5432"
+      CATALOG_URL: http://catalog-service:8082
+      INVENTORY_URL: http://inventory-service:8083
+      NOTIFICATION_URL: http://notification-service:8086
+    ports:
+      - "${ORDER_SERVICE_PORT:-8084}:8084"
+    networks:
+      - polyglot-network
+
+  payment-service:
+    build:
+      context: ./services/payment-service
+      dockerfile: Dockerfile
+    container_name: payment-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      order-service:
+        condition: service_started
+      inventory-service:
+        condition: service_started
+      notification-service:
+        condition: service_started
+    environment:
+      PAYMENT_DB_URL: "Host=postgres;Port=5432;Database=payment_db;Username=microapp;Password=microapp123"
+      ORDER_URL: http://order-service:8084
+      INVENTORY_URL: http://inventory-service:8083
+      NOTIFICATION_URL: http://notification-service:8086
+    ports:
+      - "${PAYMENT_SERVICE_PORT:-8085}:8085"
+    networks:
+      - polyglot-network
+
+  analytics-service:
+    build:
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+    container_name: analytics-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      catalog-service:
+        condition: service_started
+      inventory-service:
+        condition: service_started
+      order-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+    environment:
+      ANALYTICS_DB_DSN: "pgsql:host=postgres;port=5432;dbname=analytics_db"
+      DB_USER: microapp
+      DB_PASSWORD: microapp123
+      CATALOG_URL: http://catalog-service:8082
+      INVENTORY_URL: http://inventory-service:8083
+      ORDER_URL: http://order-service:8084
+      PAYMENT_URL: http://payment-service:8085
+    ports:
+      - "${ANALYTICS_SERVICE_PORT:-8087}:8087"
+    networks:
+      - polyglot-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    depends_on:
+      - auth-service
+      - catalog-service
+      - inventory-service
+      - order-service
+      - payment-service
+      - notification-service
+      - analytics-service
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    networks:
+      - polyglot-network
+
+networks:
+  polyglot-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
