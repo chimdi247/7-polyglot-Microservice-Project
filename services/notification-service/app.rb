@@ -1,6 +1,44 @@
 require "sinatra"
 require "json"
 require "pg"
+require "prometheus/client"
+require "prometheus/client/formatter/text"
+
+# OpenTelemetry auto-instrumentation for Sinatra/pg: wrapped in
+# begin/rescue since telemetry setup must never be able to prevent
+# the service itself from starting. Once configured, the Sinatra and
+# PG instrumentation gems patch request handling and DB calls
+# automatically -- no per-route code changes below. Traces export via
+# OTLP to the otel-collector (see observability/README.md).
+begin
+  require "opentelemetry/sdk"
+  require "opentelemetry/exporter/otlp"
+  require "opentelemetry/instrumentation/sinatra"
+  require "opentelemetry/instrumentation/pg"
+
+  OpenTelemetry::SDK.configure do |c|
+    c.service_name = ENV.fetch("OTEL_SERVICE_NAME", "notification-service")
+    c.use "OpenTelemetry::Instrumentation::Sinatra"
+    c.use "OpenTelemetry::Instrumentation::PG"
+  end
+rescue StandardError => e
+  warn "OpenTelemetry failed to initialize, continuing without it: #{e.message}"
+end
+
+# Direct Prometheus exposition (rather than routing metrics through
+# OpenTelemetry) so metric names are exact and under our control --
+# scraped directly at /metrics, see observability/prometheus/prometheus.yml.
+prometheus = Prometheus::Client.registry
+HTTP_REQUESTS_TOTAL = prometheus.counter(
+  :http_requests_total,
+  docstring: "Total HTTP requests, by method/path/status",
+  labels: [:method, :path, :status]
+)
+HTTP_REQUEST_DURATION = prometheus.histogram(
+  :http_request_duration_seconds,
+  docstring: "HTTP request duration in seconds",
+  labels: [:method, :path]
+)
 
 set :bind, "0.0.0.0"
 set :port, 8086
@@ -55,6 +93,21 @@ before do
     "Access-Control-Allow-Methods" => "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers" => "Content-Type,Authorization"
   )
+  @request_start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+end
+
+after do
+  # Skip /metrics itself so the scrape endpoint doesn't inflate its
+  # own counters on every Prometheus scrape.
+  next if request.path_info == "/metrics"
+  duration = Process.clock_gettime(Process::CLOCK_MONOTONIC) - (@request_start || Process.clock_gettime(Process::CLOCK_MONOTONIC))
+  HTTP_REQUESTS_TOTAL.increment(labels: { method: request.request_method, path: request.path_info, status: response.status.to_s })
+  HTTP_REQUEST_DURATION.observe(duration, labels: { method: request.request_method, path: request.path_info })
+end
+
+get "/metrics" do
+  content_type "text/plain"
+  Prometheus::Client::Formatter::Text.new.marshal(prometheus)
 end
 
 options "*" do

@@ -107,7 +107,35 @@ Every service has a `HEALTHCHECK` (each language's Dockerfile hits its own
 `/health` endpoint), so `docker compose ps` will show `healthy`/`unhealthy`
 once containers finish starting.
 
-## 7. Common operations
+## 7. Observability: Grafana, Prometheus, Alertmanager, Loki, Tempo
+
+Also started automatically by `docker compose up`, no extra flags needed:
+
+| What | URL | Login |
+|---|---|---|
+| Grafana (7 per-service dashboards) | http://localhost:3001 | `admin` / `admin` |
+| Prometheus | http://localhost:9091 | -- |
+| Alertmanager | http://localhost:9093 | -- |
+
+Every service exports traces (all except analytics-service, which has a
+documented exception) and metrics via OpenTelemetry/native Prometheus
+clients, and every container's logs flow into Loki. Alerting for node
+CPU/memory > 70% is wired through Alertmanager. Full details -- how each
+of the 7 languages is instrumented, what each dashboard shows, and a
+couple of things worth double-checking -- are in
+[observability/README.md](observability/README.md).
+
+## 8. Load, stress, and spike testing
+
+```bash
+./test/load-test.sh
+./test/stress-test.sh
+./test/spike-test.sh
+```
+
+See [test/README.md](test/README.md).
+
+## 9. Common operations
 
 ```bash
 # Rebuild + restart a single service after a code change
@@ -120,7 +148,7 @@ docker compose down
 docker compose down -v
 ```
 
-## 8. Changing the database password
+## 10. Changing the database password
 
 The `microapp` / `microapp123` credentials are intentionally hardcoded in
 three places rather than templated through `.env`, because a mismatch
@@ -154,6 +182,33 @@ database connection string and peer-service URLs from environment
 variables with sensible localhost defaults, and the frontend already used
 relative `/api/*` paths rather than hardcoded ports. This project was
 unusually well set up for containerization already.
+
+## What was added for observability
+
+On top of the above, full observability was added across all 7 languages:
+
+- **Traces**: OpenTelemetry in every service except analytics-service
+  (documented exception -- see `observability/README.md`), ranging from
+  truly zero-code (Java's `-javaagent`, Python's `opentelemetry-instrument`,
+  Node's `NODE_OPTIONS=--require`) to a small amount of manual SDK
+  registration where a language has no bytecode-weaving equivalent (Go,
+  C#, Ruby).
+- **Metrics**: each service's own native Prometheus client library,
+  exposing `/metrics` directly (rather than trusting 7 different OTel SDK
+  versions to name auto-generated metrics consistently). `orders_created_total`
+  and `payments_captured_total` were added as explicit business-KPI counters,
+  incremented at the actual success point in `order-service`'s and
+  `payment-service`'s own code.
+- **Logs**: Promtail, tailing every container's stdout via the Docker
+  socket -- no per-service code changes.
+- A couple of real bugs were caught and fixed while wiring this up: a
+  Node.js `--require` bootstrap file needed a `.cjs` extension (not `.js`)
+  since `inventory-service`'s `package.json` sets `"type": "module"`, and
+  an initial PHP metrics implementation used `apcu_cas()` on a float value,
+  which that function doesn't support (fixed to a simpler approach, safe
+  since PHP's built-in dev server handles requests one at a time anyway).
+
+Full details in [observability/README.md](observability/README.md).
 
 ## Known limitations
 

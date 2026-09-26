@@ -1,6 +1,9 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(options =>
@@ -10,8 +13,38 @@ builder.Services.AddCors(options =>
 });
 builder.Services.AddHttpClient();
 
+// OpenTelemetry tracing: AddAspNetCoreInstrumentation()/AddHttpClientInstrumentation()
+// auto-instrument every incoming request and outgoing HttpClient call
+// (to order-service/inventory-service/notification-service) with
+// spans -- no per-endpoint code needed below. Exports via OTLP to the
+// otel-collector. service.name/OTLP endpoint come from the standard
+// OTEL_SERVICE_NAME / OTEL_EXPORTER_OTLP_ENDPOINT environment
+// variables (docker-compose.yml), which the exporter/resource
+// builders read automatically. See observability/README.md.
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService(
+        serviceName: Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME") ?? "payment-service"))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddOtlpExporter());
+
 var app = builder.Build();
 app.UseCors();
+
+// Direct Prometheus exposition (prometheus-net) rather than routing
+// metrics through OpenTelemetry, so metric names are exact and under
+// our control. UseHttpMetrics() records request count/duration for
+// every request automatically; MapMetrics() exposes them at /metrics
+// (scraped by Prometheus directly, see
+// observability/prometheus/prometheus.yml).
+app.UseHttpMetrics();
+app.MapMetrics();
+
+// Business KPI: number of payments successfully captured.
+var paymentsCapturedTotal = Prometheus.Metrics.CreateCounter(
+    "payments_captured_total",
+    "Total number of payments successfully captured");
 
 var connectionString =
     Environment.GetEnvironmentVariable("PAYMENT_DB_URL")
@@ -151,6 +184,8 @@ app.MapPost("/payments", async (PaymentCreate input, IHttpClientFactory factory)
         );
         throw;
     }
+
+    paymentsCapturedTotal.Inc();
 
     try
     {

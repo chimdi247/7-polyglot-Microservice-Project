@@ -6,7 +6,10 @@ RUN apk add --no-cache curl \
     && addgroup -S app && adduser -S app -G app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+# Not `npm ci`: package.json now includes prom-client and OpenTelemetry
+# packages that aren't in the committed package-lock.json (that lock
+# predates them). `npm install` resolves and updates the lock here.
+RUN npm install --omit=dev
 
 COPY src ./src
 

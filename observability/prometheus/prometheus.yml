@@ -1,0 +1,61 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Every service exposes its own direct Prometheus /metrics endpoint
+  # (native client library per language, not routed through OTel) so
+  # metric names are exact and consistent across all 7 languages. See
+  # observability/README.md.
+  - job_name: auth-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["auth-service:8081"]
+        labels: { service: auth-service, language: java }
+
+  - job_name: catalog-service
+    static_configs:
+      - targets: ["catalog-service:8082"]
+        labels: { service: catalog-service, language: go }
+
+  - job_name: inventory-service
+    static_configs:
+      - targets: ["inventory-service:8083"]
+        labels: { service: inventory-service, language: nodejs }
+
+  - job_name: order-service
+    static_configs:
+      - targets: ["order-service:8084"]
+        labels: { service: order-service, language: python }
+
+  - job_name: payment-service
+    static_configs:
+      - targets: ["payment-service:8085"]
+        labels: { service: payment-service, language: csharp }
+
+  - job_name: notification-service
+    static_configs:
+      - targets: ["notification-service:8086"]
+        labels: { service: notification-service, language: ruby }
+
+  - job_name: analytics-service
+    static_configs:
+      - targets: ["analytics-service:8087"]
+        labels: { service: analytics-service, language: php }
+
+  # Host (node) CPU/memory/disk utilization.
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]

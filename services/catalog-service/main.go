@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	_ "github.com/lib/pq"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type Product struct {
@@ -25,6 +27,10 @@ type Product struct {
 var db *sql.DB
 
 func main() {
+	ctx := context.Background()
+	shutdownTracing := setupTracing(ctx)
+	defer shutdownTracing(ctx)
+
 	dsn := getenv("CATALOG_DB_DSN", "postgres://microapp:microapp123@127.0.0.1:5432/catalog_db?sslmode=disable")
 	var err error
 	db, err = sql.Open("postgres", dsn)
@@ -42,9 +48,16 @@ func main() {
 	mux.HandleFunc("/health", health)
 	mux.HandleFunc("/products", products)
 	mux.HandleFunc("/products/", productByID)
+	mux.Handle("/metrics", metricsHandler())
+
+	// otelhttp auto-instruments every request with a trace span
+	// (method, route, status); metricsMiddleware records the
+	// Prometheus counters/histogram above. cors stays outermost so
+	// preflight OPTIONS requests are still handled before any of that.
+	handler := cors(metricsMiddleware(otelhttp.NewHandler(mux, "catalog-service")))
 
 	log.Println("catalog-service listening on http://localhost:8082")
-	log.Fatal(http.ListenAndServe(":8082", cors(mux)))
+	log.Fatal(http.ListenAndServe(":8082", handler))
 }
 
 func getenv(k, fallback string) string {

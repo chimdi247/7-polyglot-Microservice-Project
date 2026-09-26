@@ -53,6 +53,9 @@ services:
       AUTH_DB_URL: jdbc:postgresql://postgres:5432/auth_db
       DB_USER: microapp
       DB_PASSWORD: microapp123
+      OTEL_SERVICE_NAME: auth-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
     ports:
       - "${AUTH_SERVICE_PORT:-8081}:8081"
     networks:
@@ -69,6 +72,9 @@ services:
         condition: service_healthy
     environment:
       CATALOG_DB_DSN: postgres://microapp:microapp123@postgres:5432/catalog_db?sslmode=disable
+      OTEL_SERVICE_NAME: catalog-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
     ports:
       - "${CATALOG_SERVICE_PORT:-8082}:8082"
     networks:
@@ -85,6 +91,14 @@ services:
         condition: service_healthy
     environment:
       INVENTORY_DB_URL: postgres://microapp:microapp123@postgres:5432/inventory_db
+      OTEL_SERVICE_NAME: inventory-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
+      # Zero-code auto-instrumentation: patches Express/HTTP/pg at
+      # startup. otel-bootstrap.cjs (not .js) because this service's
+      # package.json sets "type": "module" -- see that file's header
+      # comment and observability/README.md.
+      NODE_OPTIONS: "--require ./src/otel-bootstrap.cjs"
     ports:
       - "${INVENTORY_SERVICE_PORT:-8083}:8083"
     networks:
@@ -101,6 +115,10 @@ services:
         condition: service_healthy
     environment:
       NOTIFICATION_DB_URL: postgres://microapp:microapp123@postgres:5432/notification_db
+      OTEL_SERVICE_NAME: notification-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
     ports:
       - "${NOTIFICATION_SERVICE_PORT:-8086}:8086"
     networks:
@@ -126,6 +144,9 @@ services:
       CATALOG_URL: http://catalog-service:8082
       INVENTORY_URL: http://inventory-service:8083
       NOTIFICATION_URL: http://notification-service:8086
+      OTEL_SERVICE_NAME: order-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
     ports:
       - "${ORDER_SERVICE_PORT:-8084}:8084"
     networks:
@@ -151,6 +172,9 @@ services:
       ORDER_URL: http://order-service:8084
       INVENTORY_URL: http://inventory-service:8083
       NOTIFICATION_URL: http://notification-service:8086
+      OTEL_SERVICE_NAME: payment-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
     ports:
       - "${PAYMENT_SERVICE_PORT:-8085}:8085"
     networks:
@@ -205,9 +229,144 @@ services:
     networks:
       - polyglot-network
 
+  # ============================================
+  # OBSERVABILITY
+  # ============================================
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./observability/otel-collector/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    depends_on:
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+    networks:
+      - polyglot-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - node-exporter
+      - alertmanager
+    networks:
+      - polyglot-network
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    restart: unless-stopped
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    networks:
+      - polyglot-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    networks:
+      - polyglot-network
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki-config.yaml
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./observability/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+    networks:
+      - polyglot-network
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./observability/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail-data:/var/lib/promtail
+    depends_on:
+      - loki
+    networks:
+      - polyglot-network
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    restart: unless-stopped
+    user: root
+    command: -config.file=/etc/tempo/tempo.yaml
+    ports:
+      - "${TEMPO_PORT:-3200}:3200"
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    networks:
+      - polyglot-network
+
+  # Host (node) CPU/memory/disk metrics.
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/host/root"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    networks:
+      - polyglot-network
+
 networks:
   polyglot-network:
     driver: bridge
 
 volumes:
   postgres-data:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+  loki-data:
+  promtail-data:
+  tempo-data:

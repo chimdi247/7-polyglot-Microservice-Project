@@ -1,0 +1,37 @@
+groups:
+  - name: node-resource-utilization
+    rules:
+      - alert: NodeCPUHigh
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 70
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ $labels.instance }} CPU usage is above 70%"
+          description: >-
+            Host {{ $labels.instance }} has averaged over 70% CPU usage for
+            more than 5 minutes.
+
+      - alert: NodeMemoryHigh
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 70
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ $labels.instance }} memory usage is above 70%"
+          description: >-
+            Host {{ $labels.instance }} has used over 70% of its available
+            memory for more than 5 minutes.
+
+  - name: service-health
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"auth-service|catalog-service|inventory-service|order-service|payment-service|notification-service|analytics-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down"
+          description: >-
+            Prometheus has been unable to scrape {{ $labels.job }} for more
+            than 2 minutes.

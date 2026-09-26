@@ -7,6 +7,8 @@ import psycopg2
 from psycopg2.extras import RealDictCursor, Json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import Counter
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, EmailStr, Field
 
 DB_DSN = os.getenv(
@@ -23,6 +25,19 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# HTTP request rate/latency/status metrics, exposed at /metrics and
+# scraped directly by Prometheus (see
+# observability/prometheus/prometheus.yml). Complements the
+# OpenTelemetry auto-instrumentation below (traces/logs), which needs
+# no code here -- see Dockerfile's CMD and observability/README.md.
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+# Business KPI: number of orders successfully created.
+ORDERS_CREATED_TOTAL = Counter(
+    "orders_created_total",
+    "Total number of orders successfully created",
 )
 
 def conn():
@@ -161,6 +176,7 @@ async def create_order(payload: OrderCreate):
         except Exception:
             pass
 
+    ORDERS_CREATED_TOTAL.inc()
     return serialize(row)
 
 @app.put("/orders/{order_id}/status")

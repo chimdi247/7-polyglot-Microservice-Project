@@ -11,6 +11,99 @@ if ($_SERVER["REQUEST_METHOD"] === "OPTIONS") {
     exit;
 }
 
+// ------------------------------------------------------------------
+// Metrics (Prometheus text exposition), backed by APCu.
+//
+// PHP's built-in server (php -S) runs each request as a fresh script
+// execution with no persistent in-process state -- a plain PHP
+// variable can't accumulate a counter across requests the way a
+// long-running Node/Java/Go process can. APCu is shared memory scoped
+// to the PHP process itself, so it survives across requests here
+// (see Dockerfile). Scraped directly at /metrics, see
+// observability/prometheus/prometheus.yml.
+//
+// Full OpenTelemetry trace auto-instrumentation was intentionally
+// left out for this service specifically -- see
+// observability/README.md for why (PHP's true zero-code
+// auto-instrumentation needs a compiled PECL extension whose exact
+// setup couldn't be verified without running it).
+// ------------------------------------------------------------------
+function metrics_record(string $method, string $path, int $status, float $durationSeconds): void {
+    if (!function_exists("apcu_enabled") || !apcu_enabled()) {
+        return;
+    }
+    $counterKey = "http_requests_total:{$method}:{$path}:{$status}";
+    apcu_add($counterKey, 0);
+    apcu_inc($counterKey);
+
+    // A small fixed-bucket histogram, tracked manually since APCu only
+    // stores scalars/arrays, not a Prometheus client object.
+    $buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
+    foreach ($buckets as $bucket) {
+        if ($durationSeconds <= $bucket) {
+            $bucketKey = "http_request_duration_seconds_bucket:{$method}:{$path}:{$bucket}";
+            apcu_add($bucketKey, 0);
+            apcu_inc($bucketKey);
+        }
+    }
+    $sumKey = "http_request_duration_seconds_sum:{$method}:{$path}";
+    $countKey = "http_request_duration_seconds_count:{$method}:{$path}";
+    apcu_add($sumKey, 0.0);
+    // PHP's built-in server (see Dockerfile's CMD) handles requests
+    // one at a time, not concurrently, so there's no real race here --
+    // a plain fetch-then-store is enough (apcu_cas() only supports
+    // integers, not floats, so it isn't an option for this counter
+    // anyway).
+    $currentSum = apcu_fetch($sumKey);
+    apcu_store($sumKey, ($currentSum === false ? 0.0 : $currentSum) + $durationSeconds);
+    apcu_add($countKey, 0);
+    apcu_inc($countKey);
+}
+
+function metrics_render(): string {
+    if (!function_exists("apcu_enabled") || !apcu_enabled()) {
+        return "# APCu not available\n";
+    }
+    $lines = [
+        "# HELP http_requests_total Total HTTP requests, by method/path/status",
+        "# TYPE http_requests_total counter",
+    ];
+    $iterator = new APCUIterator("/^http_requests_total:/");
+    foreach ($iterator as $entry) {
+        [, $method, $path, $status] = explode(":", $entry["key"], 4);
+        $lines[] = sprintf('http_requests_total{method="%s",path="%s",status="%s"} %d', $method, $path, $status, $entry["value"]);
+    }
+
+    $lines[] = "# HELP http_request_duration_seconds HTTP request duration in seconds";
+    $lines[] = "# TYPE http_request_duration_seconds histogram";
+    $bucketIterator = new APCUIterator("/^http_request_duration_seconds_bucket:/");
+    foreach ($bucketIterator as $entry) {
+        [, $method, $path, $bucket] = explode(":", $entry["key"], 4);
+        $lines[] = sprintf('http_request_duration_seconds_bucket{method="%s",path="%s",le="%s"} %d', $method, $path, $bucket, $entry["value"]);
+    }
+    $sumIterator = new APCUIterator("/^http_request_duration_seconds_sum:/");
+    foreach ($sumIterator as $entry) {
+        [, $method, $path] = explode(":", $entry["key"], 3);
+        $lines[] = sprintf('http_request_duration_seconds_sum{method="%s",path="%s"} %s', $method, $path, $entry["value"]);
+    }
+    $countIterator = new APCUIterator("/^http_request_duration_seconds_count:/");
+    foreach ($countIterator as $entry) {
+        [, $method, $path] = explode(":", $entry["key"], 3);
+        $lines[] = sprintf('http_request_duration_seconds_count{method="%s",path="%s"} %d', $method, $path, $entry["value"]);
+    }
+
+    return implode("\n", $lines) . "\n";
+}
+
+$__requestStart = microtime(true);
+$__requestMethod = $_SERVER["REQUEST_METHOD"];
+$__requestPath = parse_url($_SERVER["REQUEST_URI"] ?? "/", PHP_URL_PATH) ?: "/";
+if ($__requestPath !== "/metrics") {
+    register_shutdown_function(function () use ($__requestStart, $__requestMethod, $__requestPath) {
+        metrics_record($__requestMethod, $__requestPath, http_response_code() ?: 200, microtime(true) - $__requestStart);
+    });
+}
+
 $dbDsn = getenv("ANALYTICS_DB_DSN") ?: "pgsql:host=127.0.0.1;port=5432;dbname=analytics_db";
 $dbUser = getenv("DB_USER") ?: "microapp";
 $dbPassword = getenv("DB_PASSWORD") ?: "microapp123";
@@ -116,6 +209,12 @@ $method = $_SERVER["REQUEST_METHOD"];
 if ($path === "/health" && $method === "GET") {
     $pdo->query("SELECT 1");
     respond(200, ["service" => "analytics-service", "status" => "UP", "language" => "PHP"]);
+}
+
+if ($path === "/metrics" && $method === "GET") {
+    header("Content-Type: text/plain; version=0.0.4");
+    echo metrics_render();
+    exit;
 }
 
 if ($path === "/analytics/summary" && $method === "GET") {

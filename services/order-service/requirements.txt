@@ -4,3 +4,11 @@ psycopg2-binary==2.9.11
 httpx==0.28.1
 pydantic==2.12.4
 email-validator==2.2.0
+prometheus-fastapi-instrumentator==7.1.0
+prometheus-client==0.21.1
+opentelemetry-distro==0.50b0
+opentelemetry-exporter-otlp==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-httpx==0.50b0
+opentelemetry-instrumentation-psycopg2==0.50b0
+opentelemetry-instrumentation-logging==0.50b0

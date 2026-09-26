@@ -3,7 +3,10 @@ FROM golang:1.22-alpine AS build
 WORKDIR /app
 
 COPY go.mod go.sum ./
-RUN go mod download
+# Not `go mod download`: go.sum predates the new Prometheus/OpenTelemetry
+# dependencies added to go.mod, so it's missing entries for them.
+# `go mod tidy` resolves and regenerates go.sum here at build time.
+RUN go mod tidy
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /catalog-service .
