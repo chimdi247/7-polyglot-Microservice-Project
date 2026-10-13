@@ -15,6 +15,22 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
   # Every service exposes its own direct Prometheus /metrics endpoint
   # (native client library per language, not routed through OTel) so
   # metric names are exact and consistent across all 7 languages. See

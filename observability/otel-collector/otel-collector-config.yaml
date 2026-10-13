@@ -18,6 +18,8 @@ processors:
         action: upsert
 
 exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
   # Traces -> Tempo
   otlp/tempo:
     endpoint: tempo:4317
@@ -46,6 +48,10 @@ service:
       receivers: [otlp]
       processors: [resource, batch]
       exporters: [otlphttp/loki, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [prometheus, debug]
 
   telemetry:
     logs:

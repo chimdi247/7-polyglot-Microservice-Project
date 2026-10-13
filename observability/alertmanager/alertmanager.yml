@@ -6,11 +6,11 @@
 
 global:
   resolve_timeout: 5m
-  smtp_smarthost: "smtp.example.com:587"
-  smtp_from: "alerts@example.com"
-  smtp_auth_username: "alerts@example.com"
+  smtp_smarthost: "smtp.gmail.com:587"
+  smtp_from: "chimdi247@gmail.com"
+  smtp_auth_username: "chimdi247@gmail.com"
   smtp_auth_password: "changeme"
-  smtp_require_tls: false
+  smtp_require_tls: true
 
 route:
   receiver: ops-email
@@ -27,7 +27,7 @@ route:
 receivers:
   - name: ops-email
     email_configs:
-      - to: "admin@example.com"
+      - to: "shimdi247@gmail.com"
         send_resolved: true
 
 inhibit_rules:
