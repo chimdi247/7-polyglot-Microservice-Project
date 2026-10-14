@@ -56,6 +56,7 @@ services:
       OTEL_SERVICE_NAME: auth-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
     ports:
       - "${AUTH_SERVICE_PORT:-8081}:8081"
     networks:
@@ -94,6 +95,7 @@ services:
       OTEL_SERVICE_NAME: inventory-service
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       # Zero-code auto-instrumentation: patches Express/HTTP/pg at
       # startup. otel-bootstrap.cjs (not .js) because this service's
       # package.json sets "type": "module" -- see that file's header
@@ -119,6 +121,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       OTEL_TRACES_EXPORTER: otlp
       OTEL_RESOURCE_ATTRIBUTES: service.namespace=polyglot-microservices
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
     ports:
       - "${NOTIFICATION_SERVICE_PORT:-8086}:8086"
     networks:
