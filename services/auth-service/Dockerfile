@@ -25,7 +25,7 @@ COPY --from=build /app/target/*.jar app.jar
 # (Spring MVC, JDBC, the JVM itself), configured entirely through
 # OTEL_* environment variables (see docker-compose.yml). See
 # observability/README.md.
-ADD https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar /app/opentelemetry-javaagent.jar
+ADD --chmod=644 https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar /app/opentelemetry-javaagent.jar
 
 EXPOSE 8081
 

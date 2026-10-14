@@ -70,8 +70,3 @@ scrape_configs:
     static_configs:
       - targets: ["analytics-service:8087"]
         labels: { service: analytics-service, language: php }
-
-  # Host (node) CPU/memory/disk utilization.
-  - job_name: node-exporter
-    static_configs:
-      - targets: ["node-exporter:9100"]

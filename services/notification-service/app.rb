@@ -2,7 +2,7 @@ require "sinatra"
 require "json"
 require "pg"
 require "prometheus/client"
-require "prometheus/client/formatter/text"
+require "prometheus/client/formats/text"
 
 # OpenTelemetry auto-instrumentation for Sinatra/pg: wrapped in
 # begin/rescue since telemetry setup must never be able to prevent
@@ -107,7 +107,7 @@ end
 
 get "/metrics" do
   content_type "text/plain"
-  Prometheus::Client::Formatter::Text.new.marshal(prometheus)
+  Prometheus::Client::Formats::Text.marshal(prometheus)
 end
 
 options "*" do
